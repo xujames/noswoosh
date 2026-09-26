@@ -101,7 +101,11 @@ jobs:
           # Upstream's text: first match only, printable characters only, and
           # kept in a file -- never $GITHUB_ENV, where a crafted line could
           # set variables for the steps after this one.
-          version=$(git show "$SHA:noswoosh.swift" | sed -n 's/^let noswooshVersion = "\(.*\)"$/\1/p' | head -n 1 | tr -cd '[:alnum:]._-')
+          # Wherever it lives: noswoosh.swift, or Sources/Version.swift on
+          # upstream's menu-bar-item branch. None found is "?", not a failure.
+          version=$(git grep -h -E '^let noswooshVersion = "' "$SHA" -- '*.swift' |
+            sed -n 's/^let noswooshVersion = "\(.*\)"$/\1/p') || version=""
+          version=$(printf '%s' "${version%%$'\n'*}" | tr -cd '[:alnum:]._-')
           case $BUILD in
             success) build="passed" ;;
             *)       build="**$BUILD**, check it before merging" ;;

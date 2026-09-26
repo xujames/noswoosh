@@ -150,8 +150,11 @@ jobs:
           if [ -n "$number" ]; then
             gh api -X PATCH "repos/$GITHUB_REPOSITORY/pulls/$number" -f title="$title" -F body=@body.md --jq .html_url
           else
+            # maintainer_can_modify would give this repository push access to
+            # upstream's branch, which only upstream can grant: GitHub refuses
+            # the whole request unless it's off.
             gh api -X POST "repos/$GITHUB_REPOSITORY/pulls" -f title="$title" -F body=@body.md \
-              -f head="$owner:$BRANCH" -f base=main --jq .html_url
+              -f head="$owner:$BRANCH" -f base=main -F maintainer_can_modify=false --jq .html_url
           fi | tee -a "$GITHUB_STEP_SUMMARY"
 
   # GitHub switches off a public repository's scheduled workflows after 60

@@ -1,25 +1,16 @@
 # Build noswoosh on macOS: the binary, and noswoosh.app ad-hoc signed and
-# sealed. Runs on every push to main, on demand, and from upstream-sync.yml,
-# which builds each new upstream commit before offering it as a pull request.
+# sealed. Runs on every push to main and on demand, so only reviewed code:
+# upstream changes reach main through pull requests you merge
+# (upstream-sync.yml), and nothing builds them before that.
 name: Build
 
 on:
   push:
     branches: [main]
   workflow_dispatch:
-  workflow_call:
-    inputs:
-      repository:
-        description: Repository to build, owner/name (default this one)
-        type: string
-        default: ''
-      ref:
-        description: Commit to build (default the triggering one)
-        type: string
-        default: ''
 
-# From upstream-sync.yml this runs upstream's scripts before anyone has read
-# them, so they get a read-only token and no stored credentials.
+# The build runs the repository's scripts: a read-only token and no stored
+# credentials.
 permissions:
   contents: read
 
@@ -33,8 +24,6 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          repository: ${{ inputs.repository || github.repository }}
-          ref: ${{ inputs.ref || github.sha }}
           persist-credentials: false
 
       - name: Build

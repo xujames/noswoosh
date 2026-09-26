@@ -1,8 +1,9 @@
 # Watch mmathys/noswoosh and offer what's new upstream as a pull request into
-# main: built first, with the added lines that touch what noswoosh is trusted
-# with listed for review (.github/scripts/upstream-flags.sh). It never merges.
-# noswoosh runs with Accessibility permission, so a person reads each change
-# before it lands.
+# main, with the added lines that touch what noswoosh is trusted with listed
+# for review (.github/scripts/upstream-flags.sh). noswoosh runs with
+# Accessibility permission, so a person reads each change first: this never
+# builds or runs upstream's code, and never merges. build.yml builds main once
+# the pull request is merged.
 #
 # The pull request comes straight from upstream's branch, so nothing is pushed
 # here and it follows upstream by itself; each run refreshes its description.
@@ -64,18 +65,9 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           echo "$UPSTREAM $UPSTREAM_BRANCH is at ${sha:0:7}: $new commit(s) not in main." | tee -a "$GITHUB_STEP_SUMMARY"
 
-  build:
+  pull-request:
     needs: check
     if: needs.check.outputs.new != '0'
-    uses: ./.github/workflows/build.yml
-    with:
-      repository: ${{ needs.check.outputs.repository }}
-      ref: ${{ needs.check.outputs.sha }}
-
-  pull-request:
-    needs: [check, build]
-    # Also when the build fails: the pull request then says so.
-    if: always() && needs.check.result == 'success' && needs.check.outputs.new != '0'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -94,8 +86,6 @@ jobs:
           BRANCH: ${{ needs.check.outputs.branch }}
           SHA: ${{ needs.check.outputs.sha }}
           NEW: ${{ needs.check.outputs.new }}
-          BUILD: ${{ needs.build.result }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           git fetch --no-tags -- "https://github.com/$UPSTREAM.git" "$SHA"
           # Upstream's text: first match only, printable characters only, and
@@ -106,17 +96,13 @@ jobs:
           version=$(git grep -h -E '^let noswooshVersion = "' "$SHA" -- '*.swift' |
             sed -n 's/^let noswooshVersion = "\(.*\)"$/\1/p') || version=""
           version=$(printf '%s' "${version%%$'\n'*}" | tr -cd '[:alnum:]._-')
-          case $BUILD in
-            success) build="passed" ;;
-            *)       build="**$BUILD**, check it before merging" ;;
-          esac
           on=""
           [ "$BRANCH" = main ] || on=" on $BRANCH"
           echo "Upstream noswoosh ${version:-?}$on: $NEW new commit(s)" > title.txt
           {
             printf '[%s](https://github.com/%s) `%s` has **%s** commit(s) not in `main`, up to [`%s`](https://github.com/%s/commit/%s) (noswoosh %s).\n\n' \
               "$UPSTREAM" "$UPSTREAM" "$BRANCH" "$NEW" "${SHA:0:7}" "$UPSTREAM" "$SHA" "${version:-?}"
-            printf '**Build on macOS:** %s ([run and artifacts](%s)).\n\n' "$build" "$RUN_URL"
+            printf '**Not built.** Nothing builds or runs this code before you review it; the Build workflow builds `main` once you merge.\n\n'
             printf 'noswoosh runs with Accessibility permission, so read the whole change before merging. '
             printf 'The flags below are the added lines that touch what that permission, or the build, could be used for: a place to start, not the whole review.\n\n'
             printf '## Flagged\n\n'
@@ -134,7 +120,8 @@ jobs:
             git diff --stat "HEAD...$SHA"
             printf '```\n\n## Merging\n\n'
             printf -- '- Use a **merge commit**, not squash or rebase, so the next sync only shows what is new.\n'
-            printf -- '- Then rebuild and reinstall on the Mac. An ad-hoc signed build is a new app to macOS, so grant it Accessibility again.\n'
+            printf -- '- Merging starts the Build workflow on `main`. Check it passes before installing.\n'
+            printf -- '- Then rebuild and reinstall on the Mac (`scripts/install.sh`). An ad-hoc signed build is a new app to macOS, so grant it Accessibility again.\n'
           } > body.md
 
       - name: Open or update the pull request

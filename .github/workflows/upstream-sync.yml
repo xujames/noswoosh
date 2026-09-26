@@ -17,6 +17,11 @@ on:
   schedule:
     - cron: '41 13 * * *'  # daily
   workflow_dispatch:
+    inputs:
+      branch:
+        description: Upstream branch to compare with main
+        type: string
+        default: main
 
 permissions:
   contents: read
@@ -45,9 +50,10 @@ jobs:
       - id: check
         env:
           UPSTREAM: mmathys/noswoosh
-          UPSTREAM_BRANCH: main
+          UPSTREAM_BRANCH: ${{ inputs.branch || 'main' }}
         run: |
-          git fetch --no-tags "https://github.com/$UPSTREAM.git" "$UPSTREAM_BRANCH"
+          git check-ref-format --branch "$UPSTREAM_BRANCH" > /dev/null
+          git fetch --no-tags -- "https://github.com/$UPSTREAM.git" "refs/heads/$UPSTREAM_BRANCH"
           sha=$(git rev-parse FETCH_HEAD)
           new=$(git rev-list --count HEAD..FETCH_HEAD)
           {
@@ -85,12 +91,13 @@ jobs:
       - name: Describe the changes
         env:
           UPSTREAM: ${{ needs.check.outputs.repository }}
+          BRANCH: ${{ needs.check.outputs.branch }}
           SHA: ${{ needs.check.outputs.sha }}
           NEW: ${{ needs.check.outputs.new }}
           BUILD: ${{ needs.build.result }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          git fetch --no-tags "https://github.com/$UPSTREAM.git" "$SHA"
+          git fetch --no-tags -- "https://github.com/$UPSTREAM.git" "$SHA"
           # Upstream's text: first match only, printable characters only, and
           # kept in a file -- never $GITHUB_ENV, where a crafted line could
           # set variables for the steps after this one.
@@ -99,10 +106,12 @@ jobs:
             success) build="passed" ;;
             *)       build="**$BUILD**, check it before merging" ;;
           esac
-          echo "Upstream noswoosh ${version:-?}: $NEW new commit(s)" > title.txt
+          on=""
+          [ "$BRANCH" = main ] || on=" on $BRANCH"
+          echo "Upstream noswoosh ${version:-?}$on: $NEW new commit(s)" > title.txt
           {
-            printf '[%s](https://github.com/%s) has **%s** commit(s) not in `main`, up to [`%s`](https://github.com/%s/commit/%s) (noswoosh %s).\n\n' \
-              "$UPSTREAM" "$UPSTREAM" "$NEW" "${SHA:0:7}" "$UPSTREAM" "$SHA" "${version:-?}"
+            printf '[%s](https://github.com/%s) `%s` has **%s** commit(s) not in `main`, up to [`%s`](https://github.com/%s/commit/%s) (noswoosh %s).\n\n' \
+              "$UPSTREAM" "$UPSTREAM" "$BRANCH" "$NEW" "${SHA:0:7}" "$UPSTREAM" "$SHA" "${version:-?}"
             printf '**Build on macOS:** %s ([run and artifacts](%s)).\n\n' "$build" "$RUN_URL"
             printf 'noswoosh runs with Accessibility permission, so read the whole change before merging. '
             printf 'The flags below are the added lines that touch what that permission, or the build, could be used for: a place to start, not the whole review.\n\n'

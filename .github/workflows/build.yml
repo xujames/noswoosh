@@ -39,10 +39,12 @@ jobs:
 
       - name: Build
         run: |
-          swiftc noswoosh.swift -O -o noswoosh \
-            -F /System/Library/PrivateFrameworks -framework SkyLight
+          # Upstream's script compiles the sources itself, so the build follows
+          # upstream's layout: noswoosh.swift today, Sources/*.swift on its
+          # menu-bar-item branch.
+          ./scripts/make-app-bundle.sh --out build
+          cp build/noswoosh.app/Contents/MacOS/noswoosh noswoosh
           ./noswoosh version
-          ./scripts/make-app-bundle.sh --binary ./noswoosh --out build
           # Without a signing identity the script leaves the bundle unsealed,
           # which codesign rejects; seal it with an ad-hoc signature.
           codesign --force --sign - build/noswoosh.app

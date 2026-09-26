@@ -1,0 +1,66 @@
+# Build noswoosh on macOS: the binary, and noswoosh.app ad-hoc signed and
+# sealed. Runs on every push to main, on demand, and from upstream-sync.yml,
+# which builds each new upstream commit before offering it as a pull request.
+name: Build
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      repository:
+        description: Repository to build, owner/name (default this one)
+        type: string
+        default: ''
+      ref:
+        description: Commit to build (default the triggering one)
+        type: string
+        default: ''
+
+# From upstream-sync.yml this runs upstream's scripts before anyone has read
+# them, so they get a read-only token and no stored credentials.
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash  # -eo pipefail
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ inputs.repository || github.repository }}
+          ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
+
+      - name: Build
+        run: |
+          swiftc noswoosh.swift -O -o noswoosh \
+            -F /System/Library/PrivateFrameworks -framework SkyLight
+          ./noswoosh version
+          ./scripts/make-app-bundle.sh --binary ./noswoosh --out build
+          # Without a signing identity the script leaves the bundle unsealed,
+          # which codesign rejects; seal it with an ad-hoc signature.
+          codesign --force --sign - build/noswoosh.app
+          codesign --verify --strict --verbose=2 build/noswoosh.app
+
+      - name: Package
+        run: |
+          ditto -c -k --keepParent build/noswoosh.app noswoosh.app.zip
+          {
+            echo '```'
+            ./noswoosh version
+            shasum -a 256 noswoosh noswoosh.app.zip
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: noswoosh
+          path: |
+            noswoosh
+            noswoosh.app.zip

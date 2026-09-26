@@ -1,0 +1,153 @@
+# Watch mmathys/noswoosh and offer what's new upstream as a pull request into
+# main: built first, with the added lines that touch what noswoosh is trusted
+# with listed for review (.github/scripts/upstream-flags.sh). It never merges.
+# noswoosh runs with Accessibility permission, so a person reads each change
+# before it lands.
+#
+# The pull request comes straight from upstream's branch, so nothing is pushed
+# here and it follows upstream by itself; each run refreshes its description.
+# Merge it with a merge commit, not squash or rebase, so the next run compares
+# against what you took.
+#
+# Needs Settings > Actions > General > "Allow GitHub Actions to create and
+# approve pull requests".
+name: Upstream sync
+
+on:
+  schedule:
+    - cron: '41 13 * * *'  # daily
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: upstream-sync
+
+defaults:
+  run:
+    shell: bash  # -eo pipefail: a failing command in a pipe fails the step
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      repository: ${{ steps.check.outputs.repository }}
+      branch: ${{ steps.check.outputs.branch }}
+      sha: ${{ steps.check.outputs.sha }}
+      new: ${{ steps.check.outputs.new }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - id: check
+        env:
+          UPSTREAM: mmathys/noswoosh
+          UPSTREAM_BRANCH: main
+        run: |
+          git fetch --no-tags "https://github.com/$UPSTREAM.git" "$UPSTREAM_BRANCH"
+          sha=$(git rev-parse FETCH_HEAD)
+          new=$(git rev-list --count HEAD..FETCH_HEAD)
+          {
+            echo "repository=$UPSTREAM"
+            echo "branch=$UPSTREAM_BRANCH"
+            echo "sha=$sha"
+            echo "new=$new"
+          } >> "$GITHUB_OUTPUT"
+          echo "$UPSTREAM $UPSTREAM_BRANCH is at ${sha:0:7}: $new commit(s) not in main." | tee -a "$GITHUB_STEP_SUMMARY"
+
+  build:
+    needs: check
+    if: needs.check.outputs.new != '0'
+    uses: ./.github/workflows/build.yml
+    with:
+      repository: ${{ needs.check.outputs.repository }}
+      ref: ${{ needs.check.outputs.sha }}
+
+  pull-request:
+    needs: [check, build]
+    # Also when the build fails: the pull request then says so.
+    if: always() && needs.check.result == 'success' && needs.check.outputs.new != '0'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      # This repository's own main, so the flag script that runs is the
+      # reviewed one, never upstream's.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Describe the changes
+        env:
+          UPSTREAM: ${{ needs.check.outputs.repository }}
+          SHA: ${{ needs.check.outputs.sha }}
+          NEW: ${{ needs.check.outputs.new }}
+          BUILD: ${{ needs.build.result }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          git fetch --no-tags "https://github.com/$UPSTREAM.git" "$SHA"
+          # Upstream's text: first match only, printable characters only, and
+          # kept in a file -- never $GITHUB_ENV, where a crafted line could
+          # set variables for the steps after this one.
+          version=$(git show "$SHA:noswoosh.swift" | sed -n 's/^let noswooshVersion = "\(.*\)"$/\1/p' | head -n 1 | tr -cd '[:alnum:]._-')
+          case $BUILD in
+            success) build="passed" ;;
+            *)       build="**$BUILD**, check it before merging" ;;
+          esac
+          echo "Upstream noswoosh ${version:-?}: $NEW new commit(s)" > title.txt
+          {
+            printf '[%s](https://github.com/%s) has **%s** commit(s) not in `main`, up to [`%s`](https://github.com/%s/commit/%s) (noswoosh %s).\n\n' \
+              "$UPSTREAM" "$UPSTREAM" "$NEW" "${SHA:0:7}" "$UPSTREAM" "$SHA" "${version:-?}"
+            printf '**Build on macOS:** %s ([run and artifacts](%s)).\n\n' "$build" "$RUN_URL"
+            printf 'noswoosh runs with Accessibility permission, so read the whole change before merging. '
+            printf 'The flags below are the added lines that touch what that permission, or the build, could be used for: a place to start, not the whole review.\n\n'
+            printf '## Flagged\n\n'
+            .github/scripts/upstream-flags.sh HEAD "$SHA"
+            printf '## Commits\n\n'
+            # Subjects as code: an @name or owner/repo#1 in one would otherwise
+            # ping that person, or backlink that issue, from this repository.
+            q="'"
+            git log --no-merges --date=short --format='%h%x09%H%x09%ad%x09%an%x09%s' "HEAD..$SHA" |
+              while IFS=$'\t' read -r short long date author subject; do
+                printf -- '- [`%s`](https://github.com/%s/commit/%s) `%s` (%s, %s)\n' \
+                  "$short" "$UPSTREAM" "$long" "${subject//\`/$q}" "${author//[@#\`]/}" "$date"
+              done
+            printf '\n## Files\n\n```\n'
+            git diff --stat "HEAD...$SHA"
+            printf '```\n\n## Merging\n\n'
+            printf -- '- Use a **merge commit**, not squash or rebase, so the next sync only shows what is new.\n'
+            printf -- '- Then rebuild and reinstall on the Mac. An ad-hoc signed build is a new app to macOS, so grant it Accessibility again.\n'
+          } > body.md
+
+      - name: Open or update the pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UPSTREAM: ${{ needs.check.outputs.repository }}
+          BRANCH: ${{ needs.check.outputs.branch }}
+        run: |
+          owner=${UPSTREAM%%/*}
+          title=$(cat title.txt)
+          number=$(gh api "repos/$GITHUB_REPOSITORY/pulls?state=open&per_page=100" \
+            --jq ".[] | select(.head.repo.full_name == \"$UPSTREAM\" and .head.ref == \"$BRANCH\") | .number" | head -n 1)
+          if [ -n "$number" ]; then
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/pulls/$number" -f title="$title" -F body=@body.md --jq .html_url
+          else
+            gh api -X POST "repos/$GITHUB_REPOSITORY/pulls" -f title="$title" -F body=@body.md \
+              -f head="$owner:$BRANCH" -f base=main --jq .html_url
+          fi | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # GitHub switches off a public repository's scheduled workflows after 60
+  # days without activity. Re-enabling this one on every run resets that.
+  keepalive:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api -X PUT "repos/$GITHUB_REPOSITORY/actions/workflows/upstream-sync.yml/enable"
